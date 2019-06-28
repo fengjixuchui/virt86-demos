@@ -413,10 +413,18 @@ int main() {
 
     Platform& platform = PlatformFactories[platformIndex]();
 
+    // Print out the host's features
+    printf("Host features:\n");
+    printf("  Maximum guest physical address: 0x%" PRIx64 "\n", HostInfo.gpa.maxAddress);
+    printf("  Floating point extensions:");
+    printFPExts(HostInfo.floatingPointExtensions);
+    printf("\n\n");
+
     // Print out the platform's features
-    printf("Features:\n");
+    printf("Hypervisor features:\n");
     auto& features = platform.GetFeatures();
     printf("  Maximum number of VCPUs: %u per VM, %u global\n", features.maxProcessorsPerVM, features.maxProcessorsGlobal);
+    printf("  Maximum guest physical address: 0x%" PRIx64 "\n", features.guestPhysicalAddress.maxAddress);
     printf("  Unrestricted guest: %s\n", (features.unrestrictedGuest) ? "supported" : "unsuported");
     printf("  Extended Page Tables: %s\n", (features.extendedPageTables) ? "supported" : "unsuported");
     printf("  Guest debugging: %s\n", (features.guestDebugging) ? "available" : "unavailable");
@@ -436,15 +444,7 @@ int main() {
         }
     }
     printf("  Floating point extensions:");
-    const auto fpExts = BitmaskEnum(features.floatingPointExtensions);
-    if (!fpExts) printf(" None");
-    else {
-        if (fpExts.AnyOf(FloatingPointExtension::SSE2)) printf(" SSE2");
-        if (fpExts.AnyOf(FloatingPointExtension::AVX)) printf(" AVX");
-        if (fpExts.AnyOf(FloatingPointExtension::VEX)) printf(" VEX");
-        if (fpExts.AnyOf(FloatingPointExtension::MVEX)) printf(" MVEX");
-        if (fpExts.AnyOf(FloatingPointExtension::EVEX)) printf(" EVEX");
-    }
+    printFPExts(features.floatingPointExtensions);
     printf("\n");
     printf("  Extended control registers:");
     const auto extCRs = BitmaskEnum(features.extendedControlRegisters);
@@ -505,53 +505,27 @@ int main() {
     
     // Map ROM to the top of the 32-bit address range
     printf("Mapping ROM... ");
-    auto memMapStatus = vm.MapGuestMemory(romBase, romSize, MemoryFlags::Read | MemoryFlags::Execute, rom);
-    switch (memMapStatus) {
-    case MemoryMappingStatus::OK: printf("succeeded\n"); break;
-    case MemoryMappingStatus::Unsupported: printf("failed: unsupported operation\n"); return -1;
-    case MemoryMappingStatus::MisalignedHostMemory: printf("failed: memory host block is misaligned\n"); return -1;
-    case MemoryMappingStatus::MisalignedAddress: printf("failed: base address is misaligned\n"); return -1;
-    case MemoryMappingStatus::MisalignedSize: printf("failed: size is misaligned\n"); return -1;
-    case MemoryMappingStatus::EmptyRange: printf("failed: size is zero\n"); return -1;
-    case MemoryMappingStatus::AlreadyAllocated: printf("failed: host memory block is already allocated\n"); return -1;
-    case MemoryMappingStatus::InvalidFlags: printf("failed: invalid flags supplied\n"); return -1;
-    case MemoryMappingStatus::Failed: printf("failed\n"); return -1;
-    default: printf("failed: unhandled reason (%d)\n", static_cast<int>(memMapStatus)); return -1;
+    {
+        auto memMapStatus = vm.MapGuestMemory(romBase, romSize, MemoryFlags::Read | MemoryFlags::Execute, rom);
+        printMemoryMappingStatus(memMapStatus);
+        if (memMapStatus != MemoryMappingStatus::OK) return -1;
     }
 
     // Alias ROM to the top of the 31-bit address range if supported
     // TODO: test memory aliasing in the virtual machine
     if (features.memoryAliasing) {
         printf("Mapping ROM alias... ");
-        memMapStatus = vm.MapGuestMemory(romBase >> 1, romSize, MemoryFlags::Read | MemoryFlags::Execute, rom);
-        switch (memMapStatus) {
-        case MemoryMappingStatus::OK: printf("succeeded\n"); break;
-        case MemoryMappingStatus::Unsupported: printf("failed: unsupported operation\n"); return -1;
-        case MemoryMappingStatus::MisalignedHostMemory: printf("failed: memory host block is misaligned\n"); return -1;
-        case MemoryMappingStatus::MisalignedAddress: printf("failed: base address is misaligned\n"); return -1;
-        case MemoryMappingStatus::MisalignedSize: printf("failed: size is misaligned\n"); return -1;
-        case MemoryMappingStatus::EmptyRange: printf("failed: size is zero\n"); return -1;
-        case MemoryMappingStatus::AlreadyAllocated: printf("failed: host memory block is already allocated\n"); return -1;
-        case MemoryMappingStatus::InvalidFlags: printf("failed: invalid flags supplied\n"); return -1;
-        case MemoryMappingStatus::Failed: printf("failed\n"); return -1;
-        default: printf("failed: unhandled reason (%d)\n", static_cast<int>(memMapStatus)); return -1;
-        }
+        auto memMapStatus = vm.MapGuestMemory(romBase >> 1, romSize, MemoryFlags::Read | MemoryFlags::Execute, rom);
+        printMemoryMappingStatus(memMapStatus);
+        if (memMapStatus != MemoryMappingStatus::OK) return -1;
     }
 
     // Map RAM to the bottom of the 32-bit address range
     printf("Mapping RAM... ");
-    memMapStatus = vm.MapGuestMemory(ramBase, ramSize, MemoryFlags::Read | MemoryFlags::Write | MemoryFlags::Execute | MemoryFlags::DirtyPageTracking, ram);
-    switch (memMapStatus) {
-    case MemoryMappingStatus::OK: printf("succeeded\n"); break;
-    case MemoryMappingStatus::Unsupported: printf("failed: unsupported operation\n"); return -1;
-    case MemoryMappingStatus::MisalignedHostMemory: printf("failed: memory host block is misaligned\n"); return -1;
-    case MemoryMappingStatus::MisalignedAddress: printf("failed: base address is misaligned\n"); return -1;
-    case MemoryMappingStatus::MisalignedSize: printf("failed: size is misaligned\n"); return -1;
-    case MemoryMappingStatus::EmptyRange: printf("failed: size is zero\n"); return -1;
-    case MemoryMappingStatus::AlreadyAllocated: printf("failed: host memory block is already allocated\n"); return -1;
-    case MemoryMappingStatus::InvalidFlags: printf("failed: invalid flags supplied\n"); return -1;
-    case MemoryMappingStatus::Failed: printf("failed\n"); return -1;
-    default: printf("failed: unhandled reason (%d)\n", static_cast<int>(memMapStatus)); return -1;
+    {
+        auto memMapStatus = vm.MapGuestMemory(ramBase, ramSize, MemoryFlags::Read | MemoryFlags::Write | MemoryFlags::Execute | MemoryFlags::DirtyPageTracking, ram);
+        printMemoryMappingStatus(memMapStatus);
+        if (memMapStatus != MemoryMappingStatus::OK) return -1;
     }
 
     // Get the virtual processor
@@ -634,7 +608,7 @@ int main() {
     {
         // Do the jmp dword 0x8:0xffffff00 manually
         RegValue cs;
-        if (!loadSegment(vp, 0x0008, cs)) {
+        if (vp.ReadSegment(0x0008, cs) != VPOperationStatus::OK) {
             printf("Failed to load segment data for selector 0x0008\n");
             return -1;
         }
@@ -672,7 +646,7 @@ int main() {
         };
 
         for (int i = 5; i < 8; i++) {
-            if (!loadSegment(vp, 0x0010, values[i])) {
+            if (vp.ReadSegment(0x0010, values[i]) != VPOperationStatus::OK) {
                 printf("Failed to load segment data for selector 0x0010\n");
                 return -1;
             }
@@ -1728,8 +1702,12 @@ int main() {
 
     printf("\nFinal CPU register state:\n");
     printRegs(vp);
-    printFPRegs(vp);
-    printSSERegs(vp);
+    printSTRegs(vp);
+    printMMRegs(vp, MMFormat::I16);
+    printMXCSRRegs(vp);
+    printXMMRegs(vp, XMMFormat::IF32);
+    printYMMRegs(vp, XMMFormat::IF64);
+    printZMMRegs(vp, XMMFormat::IF64);
     printf("\n");
 
     // ----- Linear memory address translation --------------------------------------------------------------------------------
